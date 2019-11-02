@@ -18,8 +18,9 @@
 
 extern crate libc;
 
+use connect::Connect;
+use connect::sys::virConnectPtr;
 use std::convert::TryFrom;
-use std::str;
 
 use error::Error;
 
@@ -32,6 +33,9 @@ pub mod sys {
 
 #[link(name = "virt")]
 extern "C" {
+    fn virStreamNew(c: virConnectPtr,
+                    flags: libc::c_uint)
+                     -> sys::virStreamPtr;
     fn virStreamSend(c: sys::virStreamPtr,
                      data: *const libc::c_char,
                      nbytes: libc::size_t)
@@ -43,6 +47,9 @@ extern "C" {
     fn virStreamFree(c: sys::virStreamPtr) -> libc::c_int;
     fn virStreamAbort(c: sys::virStreamPtr) -> libc::c_int;
     fn virStreamFinish(c: sys::virStreamPtr) -> libc::c_int;
+    fn virStreamEventUpdateCallback(c: sys::virStreamPtr,
+                                    events: libc::c_int) -> libc::c_int;
+    fn virStreamEventRemoveCallback(c: sys::virStreamPtr) -> libc::c_int;
 }
 
 pub type StreamEventType = self::libc::c_uint;
@@ -50,6 +57,9 @@ pub const VIR_STREAM_EVENT_READABLE: StreamEventType = (1 << 0);
 pub const VIR_STREAM_EVENT_WRITABLE: StreamEventType = (1 << 1);
 pub const VIR_STREAM_EVENT_ERROR: StreamEventType = (1 << 2);
 pub const VIR_STREAM_EVENT_HANGUP: StreamEventType = (1 << 3);
+
+pub type StreamFlags = self::libc::c_uint;
+pub const VIR_STREAM_NONBLOCK: StreamFlags = (1 << 0);
 
 #[derive(Debug)]
 pub struct Stream {
@@ -69,7 +79,17 @@ impl Drop for Stream {
 }
 
 impl Stream {
-    pub fn new(ptr: sys::virStreamPtr) -> Stream {
+    pub fn new(conn: &Connect, flags: StreamFlags) -> Result<Stream, Error> {
+        unsafe {
+            let ptr = virStreamNew(conn.as_ptr(), flags as libc::c_uint);
+            if ptr.is_null() {
+                return Err(Error::new());
+            }
+            return Ok(Stream::from_ptr(ptr));
+        }
+    }
+
+    pub fn from_ptr(ptr: sys::virStreamPtr) -> Stream {
         Stream { ptr: Some(ptr) }
     }
 
@@ -125,5 +145,24 @@ impl Stream {
             )
         };
         usize::try_from(ret).map_err(|_| Error::new())
+    }
+
+    pub fn event_update_callback(&self, events: StreamEventType) -> Result<(), Error> {
+        let ret = unsafe {
+            virStreamEventUpdateCallback(self.as_ptr(), events as libc::c_int)
+        };
+        if ret == -1 {
+            return Err(Error::new());
+        }
+        return Ok(());
+    }
+
+    pub fn event_remove_callback(&self) -> Result<(), Error> {
+        unsafe {
+            if virStreamEventRemoveCallback(self.as_ptr()) == -1 {
+                return Err(Error::new());
+            }
+            return Ok(());
+        }
     }
 }
